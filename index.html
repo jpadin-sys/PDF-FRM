@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Editor PDF · Firma y Edita</title>
+  <link rel="stylesheet" href="css/styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>" />
+</head>
+<body>
+  <!-- HEADER -->
+  <header class="app-header">
+    <div class="brand">
+      <span class="brand-icon">📄</span>
+      <h1>Editor PDF</h1>
+    </div>
+    <div class="header-actions">
+      <button id="btnDownload" class="btn btn-primary" disabled>💾 Descargar PDF</button>
+      <button id="btnReset" class="btn btn-secondary" disabled>✖ Cerrar</button>
+    </div>
+  </header>
+
+  <!-- PANTALLA DE CARGA -->
+  <section id="uploadScreen" class="upload-screen">
+    <div class="upload-card" id="dropZone">
+      <div class="upload-icon">📂</div>
+      <h2>Arrastra tu PDF aquí</h2>
+      <p>o</p>
+      <label class="btn btn-primary">
+        Seleccionar archivo
+        <input type="file" id="fileInput" accept="application/pdf" hidden />
+      </label>
+      <p class="hint">Todo se procesa en tu navegador. Nada se sube a un servidor.</p>
+    </div>
+  </section>
+
+  <!-- ÁREA DE EDICIÓN -->
+  <main id="editorScreen" class="editor-screen hidden">
+    <!-- Barra lateral de herramientas -->
+    <aside class="toolbar">
+      <div class="tool-group">
+        <h3>Navegación</h3>
+        <div class="page-nav">
+          <button id="prevPage" class="btn btn-icon" title="Página anterior">◀</button>
+          <span id="pageInfo">1 / 1</span>
+          <button id="nextPage" class="btn btn-icon" title="Página siguiente">▶</button>
+        </div>
+      </div>
+
+      <div class="tool-group">
+        <h3>Firma / Imagen</h3>
+        <label class="btn btn-primary btn-block">
+          🖼️ Añadir imagen
+          <input type="file" id="imageInput" accept="image/png,image/jpeg" hidden />
+        </label>
+        <p class="hint small">Añade la imagen a la página actual.</p>
+      </div>
+
+      <div class="tool-group" id="imageControls" hidden>
+        <h3>Ajustes de imagen</h3>
+
+        <label class="slider-label">
+          Opacidad
+          <input type="range" id="opacityRange" min="0" max="100" value="100" />
+          <span id="opacityVal">100%</span>
+        </label>
+
+        <label class="slider-label">
+          Rotación
+          <input type="range" id="rotationRange" min="-180" max="180" value="0" />
+          <span id="rotationVal">0°</span>
+        </label>
+
+        <label class="slider-label">
+          Escala
+          <input type="range" id="scaleRange" min="10" max="300" value="100" />
+          <span id="scaleVal">100%</span>
+        </label>
+
+        <div class="filter-buttons">
+          <button class="btn btn-chip" data-filter="none">Normal</button>
+          <button class="btn btn-chip" data-filter="grayscale">Grises</button>
+          <button class="btn btn-chip" data-filter="bw">B/N</button>
+          <button class="btn btn-chip" data-filter="blue">Azul</button>
+          <button class="btn btn-chip" data-filter="contrast">Contraste</button>
+        </div>
+
+        <button id="deleteImage" class="btn btn-danger btn-block">🗑️ Eliminar imagen</button>
+      </div>
+
+      <div class="tool-group">
+        <h3>Zoom</h3>
+        <div class="zoom-controls">
+          <button id="zoomOut" class="btn btn-icon">−</button>
+          <span id="zoomVal">100%</span>
+          <button id="zoomIn" class="btn btn-icon">+</button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Área del canvas -->
+    <section class="canvas-area">
+      <div id="canvasWrapper" class="canvas-wrapper">
+        <canvas id="pdfCanvas"></canvas>
+        <!-- Capa para la imagen flotante -->
+        <div id="overlayLayer" class="overlay-layer"></div>
+      </div>
+      <p id="loadingMsg" class="loading-msg hidden">Cargando...</p>
+    </section>
+  </main>
+
+  <!-- Modal para recortar / confirmar firma (opcional simple) -->
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- CDNs -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+  <script src="js/pdf-editor.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
