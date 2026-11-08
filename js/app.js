@@ -1,12 +1,13 @@
 /* ============================================================
-   app.js — Lógica principal de la interfaz
+   app.js — Interfaz, interacción e historial
    ============================================================ */
 
 (() => {
   'use strict';
 
-  // ---------- Refs DOM ----------
-  const $ = (sel) => document.querySelector(sel);
+  const $ = (s) => document.querySelector(s);
+
+  // Refs
   const uploadScreen = $('#uploadScreen');
   const editorScreen = $('#editorScreen');
   const dropZone = $('#dropZone');
@@ -15,7 +16,6 @@
 
   const pdfCanvas = $('#pdfCanvas');
   const overlayLayer = $('#overlayLayer');
-  const canvasWrapper = $('#canvasWrapper');
 
   const pageInfo = $('#pageInfo');
   const prevBtn = $('#prevPage');
@@ -23,56 +23,138 @@
 
   const btnDownload = $('#btnDownload');
   const btnReset = $('#btnReset');
+  const btnUndo = $('#btnUndo');
+  const btnRedo = $('#btnRedo');
 
   const imageControls = $('#imageControls');
   const opacityRange = $('#opacityRange');
   const opacityVal = $('#opacityVal');
-  const rotationRange = $('#rotationRange');
-  const rotationVal = $('#rotationVal');
-  const scaleRange = $('#scaleRange');
-  const scaleVal = $('#scaleVal');
   const deleteImageBtn = $('#deleteImage');
+  const resetRotationBtn = $('#resetRotation');
+  const flipImageBtn = $('#flipImage');
+  const duplicateImageBtn = $('#duplicateImage');
+  const bringForwardBtn = $('#bringForward');
+  const sendBackwardBtn = $('#sendBackward');
   const filterButtons = document.querySelectorAll('[data-filter]');
   const zoomIn = $('#zoomIn');
   const zoomOut = $('#zoomOut');
   const zoomVal = $('#zoomVal');
-
   const toastEl = $('#toast');
 
-  // ---------- Estado ----------
-  let images = [];            // [{ el, pageIndex, dataUrlOriginal, dataUrl, x, y, w, h, rotation, opacity, filter }]
-  let selected = null;        // imagen seleccionada
-  let pageMetrics = null;     // { width, height, pdfPageWidth, pdfPageHeight, scaleFactor }
-  let baseZoom = 1.0;         // zoom relativo (0.5 = 50%, 2 = 200%)
+  // Crop modal
+  const cropModal = $('#cropModal');
+  const cropContainer = $('#cropContainer');
+  const cropImage = $('#cropImage');
+  const cropSelection = $('#cropSelection');
+  const cropCancel = $('#cropCancel');
+  const cropSkip = $('#cropSkip');
+  const cropConfirm = $('#cropConfirm');
+
+  // Estado
+  let images = [];     
+  let selected = null;
+  let pageMetrics = null;
+  let baseZoom = 1.0;
+
+  // Historial
+  let history = [];
+  let historyIndex = -1;
+
+  // Crop state
+  let pendingImageDataUrl = null;
+  let cropRect = null;
+
+  // ============================================================
+  //  UTILIDADES
+  // ============================================================
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+  function showToast(msg) {
+    clearTimeout(showToast._t);
+    toastEl.textContent = msg;
+    toastEl.classList.remove('hidden');
+    showToast._t = setTimeout(() => toastEl.classList.add('hidden'), 2600);
+  }
+
+  // ============================================================
+  //  HISTORIAL (undo/redo)
+  // ============================================================
+  function snapshot() {
+    const state = images.map((im) => ({
+      pageIndex: im.pageIndex,
+      dataUrlOriginal: im.dataUrlOriginal,
+      dataUrl: im.dataUrl,
+      xFrac: im.xFrac,
+      yFrac: im.yFrac,
+      wFrac: im.wFrac,
+      hFrac: im.hFrac,
+      rotation: im.rotation,
+      opacity: im.opacity,
+      filter: im.filter
+    }));
+    history = history.slice(0, historyIndex + 1);
+    history.push(JSON.stringify(state));
+    historyIndex = history.length - 1;
+    updateHistoryButtons();
+  }
+
+  function restoreHistory() {
+    if (historyIndex < 0 || historyIndex >= history.length) return;
+    const state = JSON.parse(history[historyIndex]);
+    overlayLayer.innerHTML = '';
+    images = [];
+    selected = null;
+    imageControls.hidden = true;
+    state.forEach((s) => {
+      const el = createFloatingImage(s);
+      s.el = el;
+      images.push(s);
+    });
+    redrawAllImages();
+  }
+
+  function undo() {
+    if (historyIndex > 0) {
+      historyIndex--;
+      restoreHistory();
+      updateHistoryButtons();
+    }
+  }
+  function redo() {
+    if (historyIndex < history.length - 1) {
+      historyIndex++;
+      restoreHistory();
+      updateHistoryButtons();
+    }
+  }
+  function updateHistoryButtons() {
+    btnUndo.disabled = historyIndex <= 0;
+    btnRedo.disabled = historyIndex >= history.length - 1;
+  }
+
+  btnUndo.addEventListener('click', undo);
+  btnRedo.addEventListener('click', redo);
 
   // ============================================================
   //  UPLOAD
   // ============================================================
-  function setupUpload() {
-    dropZone.addEventListener('click', (e) => {
-      if (e.target.closest('label')) return;
-      fileInput.click();
-    });
-    fileInput.addEventListener('change', (e) => {
-      if (e.target.files[0]) handleFile(e.target.files[0]);
-    });
-    ['dragenter', 'dragover'].forEach((ev) =>
-      dropZone.addEventListener(ev, (e) => {
-        e.preventDefault();
-        dropZone.classList.add('dragover');
-      })
-    );
-    ['dragleave', 'drop'].forEach((ev) =>
-      dropZone.addEventListener(ev, (e) => {
-        e.preventDefault();
-        dropZone.classList.remove('dragover');
-      })
-    );
-    dropZone.addEventListener('drop', (e) => {
-      const file = e.dataTransfer.files[0];
-      if (file && file.type === 'application/pdf') handleFile(file);
-    });
-  }
+  dropZone.addEventListener('click', (e) => {
+    if (e.target.closest('label')) return;
+    fileInput.click();
+  });
+  fileInput.addEventListener('change', (e) => {
+    if (e.target.files[0]) handleFile(e.target.files[0]);
+  });
+  ['dragenter', 'dragover'].forEach((ev) =>
+    dropZone.addEventListener(ev, (e) => { e.preventDefault(); dropZone.classList.add('dragover'); })
+  );
+  ['dragleave', 'drop'].forEach((ev) =>
+    dropZone.addEventListener(ev, (e) => { e.preventDefault(); dropZone.classList.remove('dragover'); })
+  );
+  dropZone.addEventListener('drop', (e) => {
+    const file = e.dataTransfer.files[0];
+    if (file && file.type === 'application/pdf') handleFile(file);
+  });
 
   async function handleFile(file) {
     if (file.type !== 'application/pdf') {
@@ -83,6 +165,8 @@
     try {
       const { totalPages } = await PDFEditor.load(file);
       images = [];
+      history = [];
+      historyIndex = -1;
       baseZoom = 1.0;
       uploadScreen.classList.add('hidden');
       editorScreen.classList.remove('hidden');
@@ -90,6 +174,7 @@
       btnReset.disabled = false;
       await renderCurrentPage();
       updatePageInfo();
+      snapshot();  
       showToast(`PDF cargado · ${totalPages} página(s)`);
     } catch (err) {
       console.error(err);
@@ -112,8 +197,25 @@
     const pageIdx = PDFEditor.getPage() - 1;
     images
       .filter((im) => im.pageIndex === pageIdx)
-      .forEach((im) => overlayLayer.appendChild(im.el));
-    syncSelectionUI();
+      .forEach((im) => {
+        overlayLayer.appendChild(im.el);
+        updateElPosition(im);
+      });
+    if (selected && images.includes(selected) && selected.pageIndex === pageIdx) {
+      selected.el.classList.add('selected');
+      imageControls.hidden = false;
+    } else {
+      selected = null;
+      imageControls.hidden = true;
+    }
+  }
+
+  function updateElPosition(im) {
+    if (!pageMetrics) return;
+    im.el.style.left = (im.xFrac * pageMetrics.width) + 'px';
+    im.el.style.top  = (im.yFrac * pageMetrics.height) + 'px';
+    im.el.style.width  = (im.wFrac * pageMetrics.width) + 'px';
+    im.el.style.height = (im.hFrac * pageMetrics.height) + 'px';
   }
 
   function updatePageInfo() {
@@ -123,7 +225,7 @@
   }
 
   // ============================================================
-  //  NAVEGACIÓN / ZOOM
+  //  NAV / ZOOM
   // ============================================================
   prevBtn.addEventListener('click', async () => {
     if (PDFEditor.getPage() > 1) {
@@ -142,146 +244,268 @@
 
   zoomIn.addEventListener('click', () => {
     baseZoom = Math.min(3, +(baseZoom + 0.15).toFixed(2));
-    updateZoomLabel();
+    zoomVal.textContent = Math.round(baseZoom * 100) + '%';
     renderCurrentPage();
   });
   zoomOut.addEventListener('click', () => {
     baseZoom = Math.max(0.3, +(baseZoom - 0.15).toFixed(2));
-    updateZoomLabel();
+    zoomVal.textContent = Math.round(baseZoom * 100) + '%';
     renderCurrentPage();
   });
-  function updateZoomLabel() {
-    zoomVal.textContent = Math.round(baseZoom * 100) + '%';
-  }
 
   // ============================================================
-  //  AÑADIR IMAGEN (FIRMA)
+  //  AÑADIR IMAGEN (con modal de recorte)
   // ============================================================
-  imageInput.addEventListener('change', async (e) => {
+  imageInput.addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    await addImageFromFile(file);
-    imageInput.value = ''; // permitir re-seleccionar el mismo
+    const reader = new FileReader();
+    reader.onload = () => openCropModal(reader.result);
+    reader.readAsDataURL(file);
+    imageInput.value = '';
   });
 
-  async function addImageFromFile(file) {
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const dataUrl = reader.result;
+  function openCropModal(dataUrl) {
+    pendingImageDataUrl = dataUrl;
+    cropImage.src = dataUrl;
+    cropSelection.classList.add('hidden');
+    cropRect = null;
+    cropConfirm.disabled = true;
+    cropModal.classList.remove('hidden');
+  }
+
+  function closeCropModal() {
+    cropModal.classList.add('hidden');
+    pendingImageDataUrl = null;
+    cropRect = null;
+  }
+
+  cropCancel.addEventListener('click', closeCropModal);
+
+  cropSkip.addEventListener('click', async () => {
+    const dataUrl = pendingImageDataUrl;
+    closeCropModal();
+    await placeImage(dataUrl);
+  });
+
+  cropConfirm.addEventListener('click', async () => {
+    if (!cropRect || !pendingImageDataUrl) return;
+    const cropped = await cropImageToDataUrl(pendingImageDataUrl, cropRect);
+    closeCropModal();
+    await placeImage(cropped);
+  });
+
+  let cropDragStart = null;
+  cropContainer.addEventListener('pointerdown', (e) => {
+    const rect = cropContainer.getBoundingClientRect();
+    cropDragStart = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    cropSelection.classList.add('hidden');
+    cropRect = null;
+    cropConfirm.disabled = true;
+    cropContainer.setPointerCapture(e.pointerId);
+  });
+  cropContainer.addEventListener('pointermove', (e) => {
+    if (!cropDragStart) return;
+    const rect = cropContainer.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const left = Math.min(cropDragStart.x, x);
+    const top = Math.min(cropDragStart.y, y);
+    const w = Math.abs(x - cropDragStart.x);
+    const h = Math.abs(y - cropDragStart.y);
+    if (w < 5 || h < 5) {
+      cropSelection.classList.add('hidden');
+      return;
+    }
+    cropSelection.style.left = left + 'px';
+    cropSelection.style.top = top + 'px';
+    cropSelection.style.width = w + 'px';
+    cropSelection.style.height = h + 'px';
+    cropSelection.classList.remove('hidden');
+    cropRect = { x: left, y: top, w, h };
+    cropConfirm.disabled = false;
+  });
+  cropContainer.addEventListener('pointerup', () => { cropDragStart = null; });
+
+  function cropImageToDataUrl(dataUrl, rect) {
+    return new Promise((resolve, reject) => {
       const img = new Image();
-      img.onload = async () => {
-        // Tamaño inicial: 30% del ancho de la página, manteniendo proporción
-        const maxW = pageMetrics.width * 0.3;
-        const ratio = img.height / img.width;
-        const w = Math.min(maxW, img.width);
-        const h = w * ratio;
-
-        const pageIdx = PDFEditor.getPage() - 1;
-        const state = {
-          pageIndex: pageIdx,
-          dataUrlOriginal: dataUrl,
-          dataUrl: dataUrl,
-          x: (pageMetrics.width - w) / 2,
-          y: (pageMetrics.height - h) / 2,
-          w, h,
-          rotation: 0,
-          opacity: 1,
-          filter: 'none'
-        };
-
-        const el = createFloatingImage(state);
-        state.el = el;
-        images.push(state);
-        overlayLayer.appendChild(el);
-        selectImage(state);
-        showToast('Imagen añadida. Arrástrala o redimensiónala.');
+      img.onload = () => {
+        const contRect = cropContainer.getBoundingClientRect();
+        const scaleX = img.naturalWidth / contRect.width;
+        const scaleY = img.naturalHeight / contRect.height;
+        const sx = rect.x * scaleX;
+        const sy = rect.y * scaleY;
+        const sw = rect.w * scaleX;
+        const sh = rect.h * scaleY;
+        const c = document.createElement('canvas');
+        c.width = Math.round(sw);
+        c.height = Math.round(sh);
+        const ctx = c.getContext('2d');
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+        resolve(c.toDataURL('image/png'));
       };
+      img.onerror = reject;
       img.src = dataUrl;
+    });
+  }
+
+  async function placeImage(dataUrl) {
+    if (!pageMetrics) return;
+    const img = new Image();
+    img.src = dataUrl;
+    await new Promise((r) => (img.onload = r));
+
+    const maxWFrac = 0.3;
+    const ratioPx = img.height / img.width;  
+    const wFrac = maxWFrac;
+    const hFrac = (wFrac * pageMetrics.width * ratioPx) / pageMetrics.height;
+
+    const state = {
+      pageIndex: PDFEditor.getPage() - 1,
+      dataUrlOriginal: dataUrl,
+      dataUrl,
+      xFrac: (1 - wFrac) / 2,
+      yFrac: (1 - hFrac) / 2,
+      wFrac,
+      hFrac,
+      rotation: 0,
+      opacity: 1,
+      filter: 'none'
     };
-    reader.readAsDataURL(file);
+    const el = createFloatingImage(state);
+    state.el = el;
+    images.push(state);
+    overlayLayer.appendChild(el);
+    updateElPosition(state);
+    selectImage(state);
+    snapshot();
+    showToast('Imagen añadida. Muévela o redimensiónala.');
   }
 
   // ============================================================
-  //  CREAR ELEMENTO FLOTANTE (DRAG / RESIZE / ROTATE)
+  //  CREAR ELEMENTO FLOTANTE (drag / resize / rotate)
   // ============================================================
   function createFloatingImage(state) {
     const el = document.createElement('div');
     el.className = 'floating-image';
-    el.style.left = state.x + 'px';
-    el.style.top = state.y + 'px';
-    el.style.width = state.w + 'px';
-    el.style.height = state.h + 'px';
+    el.style.opacity = state.opacity;
+    el.style.transform = `rotate(${state.rotation}deg)`;
 
     const inner = document.createElement('img');
-    inner.className = 'img-inner';
     inner.src = state.dataUrl;
     inner.draggable = false;
     el.appendChild(inner);
 
-    // Handles
+    // Tooltip para el ángulo de rotación
+    const tooltip = document.createElement('div');
+    tooltip.className = 'rot-tooltip';
+    tooltip.textContent = state.rotation + '°';
+    el.appendChild(tooltip);
+
     const tl = document.createElement('div'); tl.className = 'handle tl';
     const br = document.createElement('div'); br.className = 'handle br';
     const rot = document.createElement('div'); rot.className = 'handle rotate';
     el.append(tl, br, rot);
 
-    applyTransform(el, state);
-
-    // --- Drag ---
-    let dragging = false, startX, startY, startLeft, startTop;
+    // DRAG
+    let dragging = false, startX, startY, startXFrac, startYFrac;
     el.addEventListener('pointerdown', (e) => {
       if (e.target.classList.contains('handle')) return;
       selectImage(state);
       dragging = true;
-      startX = e.clientX; startY = e.clientY;
-      startLeft = state.x; startTop = state.y;
+      startX = e.clientX;
+      startY = e.clientY;
+      startXFrac = state.xFrac;
+      startYFrac = state.yFrac;
       el.setPointerCapture(e.pointerId);
     });
     el.addEventListener('pointermove', (e) => {
-      if (!dragging) return;
+      if (!dragging || !pageMetrics) return;
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
-      state.x = clamp(startLeft + dx, 0, pageMetrics.width - state.w);
-      state.y = clamp(startTop + dy, 0, pageMetrics.height - state.h);
-      el.style.left = state.x + 'px';
-      el.style.top = state.y + 'px';
+      state.xFrac = clamp(startXFrac + dx / pageMetrics.width, 0, 1 - state.wFrac);
+      state.yFrac = clamp(startYFrac + dy / pageMetrics.height, 0, 1 - state.hFrac);
+      updateElPosition(state);
     });
-    el.addEventListener('pointerup', () => { dragging = false; });
+    el.addEventListener('pointerup', () => {
+      if (dragging) snapshot();
+      dragging = false;
+    });
 
-    // --- Resize (br) ---
-    let resizing = false, rStartW, rStartH, rStartX, rStartY;
+    // RESIZE (Bottom-Right)
+    let resizingBR = false, brStartX, brStartY, brStartWFrac, brStartHFrac;
     br.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
       selectImage(state);
-      resizing = true;
-      rStartW = state.w; rStartH = state.h;
-      rStartX = e.clientX; rStartY = e.clientY;
+      resizingBR = true;
+      brStartX = e.clientX;
+      brStartY = e.clientY;
+      brStartWFrac = state.wFrac;
+      brStartHFrac = state.hFrac;
       br.setPointerCapture(e.pointerId);
     });
     br.addEventListener('pointermove', (e) => {
-      if (!resizing) return;
-      const dx = e.clientX - rStartX;
-      const dy = e.clientY - rStartY;
-      const ratio = rStartH / rStartW;
-      const newW = clamp(rStartW + dx, 20, pageMetrics.width - state.x);
-      const newH = newW * ratio;
-      if (state.y + newH > pageMetrics.height) return;
-      state.w = newW; state.h = newH;
-      el.style.width = state.w + 'px';
-      el.style.height = state.h + 'px';
-      scaleRange.value = Math.round((state.w / rStartW) * 100);
-      scaleVal.textContent = scaleRange.value + '%';
+      if (!resizingBR || !pageMetrics) return;
+      const dx = e.clientX - brStartX;
+      const ratioPx = (brStartHFrac * pageMetrics.height) / (brStartWFrac * pageMetrics.width);
+      const startWPx = brStartWFrac * pageMetrics.width;
+      const newWPx = clamp(startWPx + dx, 20, pageMetrics.width - state.xFrac * pageMetrics.width);
+      const newHPx = newWPx * ratioPx;
+      if (state.yFrac * pageMetrics.height + newHPx > pageMetrics.height) return;
+      state.wFrac = newWPx / pageMetrics.width;
+      state.hFrac = newHPx / pageMetrics.height;
+      updateElPosition(state);
     });
-    br.addEventListener('pointerup', () => { resizing = false; });
+    br.addEventListener('pointerup', () => {
+      if (resizingBR) snapshot();
+      resizingBR = false;
+    });
 
-    // --- Rotate ---
+    // RESIZE (Top-Left)
+    let resizingTL = false, tlStartX, tlStartY, tlStartXFrac, tlStartYFrac, tlStartWPx, tlStartHPx;
+    tl.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      selectImage(state);
+      resizingTL = true;
+      tlStartX = e.clientX;
+      tlStartY = e.clientY;
+      tlStartXFrac = state.xFrac;
+      tlStartYFrac = state.yFrac;
+      tlStartWPx = state.wFrac * pageMetrics.width;
+      tlStartHPx = state.hFrac * pageMetrics.height;
+      tl.setPointerCapture(e.pointerId);
+    });
+    tl.addEventListener('pointermove', (e) => {
+      if (!resizingTL || !pageMetrics) return;
+      const dx = e.clientX - tlStartX;
+      const ratioPx = tlStartHPx / tlStartWPx;
+      
+      const newWPx = clamp(tlStartWPx - dx, 20, pageMetrics.width);
+      const newHPx = newWPx * ratioPx;
+
+      state.xFrac = clamp(tlStartXFrac + (tlStartWPx - newWPx) / pageMetrics.width, 0, 1);
+      state.yFrac = clamp(tlStartYFrac + (tlStartHPx - newHPx) / pageMetrics.height, 0, 1);
+      state.wFrac = newWPx / pageMetrics.width;
+      state.hFrac = newHPx / pageMetrics.height;
+      
+      updateElPosition(state);
+    });
+    tl.addEventListener('pointerup', () => {
+      if (resizingTL) snapshot();
+      resizingTL = false;
+    });
+
+    // ROTATE
     let rotating = false, rotStartAngle, rotStartRotation, cx, cy;
     rot.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
       selectImage(state);
       rotating = true;
-      const rect = el.getBoundingClientRect();
-      cx = rect.left + rect.width / 2;
-      cy = rect.top + rect.height / 2;
+      el.classList.add('rotating');
+      const r = el.getBoundingClientRect();
+      cx = r.left + r.width / 2;
+      cy = r.top + r.height / 2;
       rotStartAngle = Math.atan2(e.clientY - cy, e.clientX - cx);
       rotStartRotation = state.rotation;
       rot.setPointerCapture(e.pointerId);
@@ -290,24 +514,27 @@
       if (!rotating) return;
       const angle = Math.atan2(e.clientY - cy, e.clientX - cx);
       let deg = rotStartRotation + ((angle - rotStartAngle) * 180) / Math.PI;
-      deg = Math.round(deg);
-      state.rotation = deg;
-      el.style.transform = `rotate(${deg}deg)`;
-      rotationRange.value = deg;
-      rotationVal.textContent = deg + '°';
+      state.rotation = Math.round(deg);
+      el.style.transform = `rotate(${state.rotation}deg)`;
+      tooltip.textContent = state.rotation + '°';
     });
-    rot.addEventListener('pointerup', () => { rotating = false; });
+    rot.addEventListener('pointerup', () => {
+      if (rotating) snapshot();
+      rotating = false;
+      el.classList.remove('rotating');
+    });
+
+    // DOBLE CLIC PARA RESTABLECER ROTACIÓN
+    el.addEventListener('dblclick', (e) => {
+      if (e.target.classList.contains('handle')) return;
+      state.rotation = 0;
+      el.style.transform = `rotate(0deg)`;
+      tooltip.textContent = '0°';
+      snapshot();
+      showToast('Rotación restablecida a 0°.');
+    });
 
     return el;
-  }
-
-  function applyTransform(el, state) {
-    el.style.opacity = state.opacity;
-    el.style.transform = `rotate(${state.rotation}deg)`;
-  }
-
-  function clamp(v, min, max) {
-    return Math.max(min, Math.min(max, v));
   }
 
   // ============================================================
@@ -325,31 +552,15 @@
     }
   }
 
-  function syncSelectionUI() {
-    if (selected && !images.includes(selected)) selected = null;
-    if (selected) {
-      selected.el.classList.add('selected');
-      imageControls.hidden = false;
-      syncControls();
-    } else {
-      imageControls.hidden = true;
-    }
-  }
-
   function syncControls() {
     if (!selected) return;
     opacityRange.value = Math.round(selected.opacity * 100);
     opacityVal.textContent = Math.round(selected.opacity * 100) + '%';
-    rotationRange.value = selected.rotation;
-    rotationVal.textContent = selected.rotation + '°';
-    scaleRange.value = 100;
-    scaleVal.textContent = '100%';
     filterButtons.forEach((b) =>
       b.classList.toggle('active', b.dataset.filter === selected.filter)
     );
   }
 
-  // Click fuera → deseleccionar
   pdfCanvas.addEventListener('pointerdown', () => {
     if (selected) {
       selected.el.classList.remove('selected');
@@ -359,7 +570,7 @@
   });
 
   // ============================================================
-  //  CONTROLES DE IMAGEN
+  //  ACCIONES SOBRE IMAGEN
   // ============================================================
   opacityRange.addEventListener('input', () => {
     if (!selected) return;
@@ -367,32 +578,7 @@
     selected.el.style.opacity = selected.opacity;
     opacityVal.textContent = opacityRange.value + '%';
   });
-
-  rotationRange.addEventListener('input', () => {
-    if (!selected) return;
-    selected.rotation = +rotationRange.value;
-    selected.el.style.transform = `rotate(${selected.rotation}deg)`;
-    rotationVal.textContent = rotationRange.value + '°';
-  });
-
-  scaleRange.addEventListener('input', () => {
-    if (!selected) return;
-    const factor = +scaleRange.value / 100;
-    const img = selected.el.querySelector('img');
-    // Guardamos el tamaño base en data attributes la primera vez
-    if (!selected.baseW) {
-      selected.baseW = selected.w;
-      selected.baseH = selected.h;
-    }
-    const nw = selected.baseW * factor;
-    const nh = selected.baseH * factor;
-    if (selected.x + nw > pageMetrics.width || selected.y + nh > pageMetrics.height) return;
-    selected.w = nw;
-    selected.h = nh;
-    selected.el.style.width = nw + 'px';
-    selected.el.style.height = nh + 'px';
-    scaleVal.textContent = scaleRange.value + '%';
-  });
+  opacityRange.addEventListener('change', () => { if (selected) snapshot(); });
 
   filterButtons.forEach((btn) => {
     btn.addEventListener('click', async () => {
@@ -403,7 +589,83 @@
       const newUrl = await PDFEditor.applyFilterToImage(selected.dataUrlOriginal, f);
       selected.dataUrl = newUrl;
       selected.el.querySelector('img').src = newUrl;
+      snapshot();
     });
+  });
+
+  resetRotationBtn.addEventListener('click', () => {
+    if (!selected) return;
+    selected.rotation = 0;
+    selected.el.style.transform = `rotate(0deg)`;
+    const tooltip = selected.el.querySelector('.rot-tooltip');
+    if (tooltip) tooltip.textContent = '0°';
+    snapshot();
+    showToast('Rotación restablecida a 0°.');
+  });
+
+  flipImageBtn.addEventListener('click', async () => {
+    if (!selected) return;
+    const img = new Image();
+    img.src = selected.dataUrl;
+    await new Promise((r) => (img.onload = r));
+    const c = document.createElement('canvas');
+    c.width = img.width;
+    c.height = img.height;
+    const ctx = c.getContext('2d');
+    ctx.translate(c.width, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(img, 0, 0);
+    selected.dataUrl = c.toDataURL('image/png');
+    selected.dataUrlOriginal = selected.dataUrl; 
+    selected.el.querySelector('img').src = selected.dataUrl;
+    snapshot();
+    showToast('Imagen volteada.');
+  });
+
+  duplicateImageBtn.addEventListener('click', () => {
+    if (!selected) return;
+    const s = selected;
+    const newState = {
+      pageIndex: s.pageIndex,
+      dataUrlOriginal: s.dataUrlOriginal,
+      dataUrl: s.dataUrl,
+      xFrac: clamp(s.xFrac + 0.02, 0, 1 - s.wFrac),
+      yFrac: clamp(s.yFrac + 0.02, 0, 1 - s.hFrac),
+      wFrac: s.wFrac,
+      hFrac: s.hFrac,
+      rotation: s.rotation,
+      opacity: s.opacity,
+      filter: s.filter
+    };
+    const el = createFloatingImage(newState);
+    newState.el = el;
+    images.push(newState);
+    overlayLayer.appendChild(el);
+    updateElPosition(newState);
+    selectImage(newState);
+    snapshot();
+    showToast('Imagen duplicada.');
+  });
+
+  bringForwardBtn.addEventListener('click', () => {
+    if (!selected) return;
+    const idx = images.indexOf(selected);
+    if (idx < 0) return;
+    images.splice(idx, 1);
+    images.push(selected);
+    redrawAllImages();
+    selectImage(selected);
+    snapshot();
+  });
+  sendBackwardBtn.addEventListener('click', () => {
+    if (!selected) return;
+    const idx = images.indexOf(selected);
+    if (idx < 0) return;
+    images.splice(idx, 1);
+    images.unshift(selected);
+    redrawAllImages();
+    selectImage(selected);
+    snapshot();
   });
 
   deleteImageBtn.addEventListener('click', () => {
@@ -412,7 +674,50 @@
     images = images.filter((im) => im !== selected);
     selected = null;
     imageControls.hidden = true;
+    snapshot();
     showToast('Imagen eliminada.');
+  });
+
+  // ============================================================
+  //  ATAJOS DE TECLADO
+  // ============================================================
+  document.addEventListener('keydown', (e) => {
+    const tag = (e.target.tagName || '').toLowerCase();
+    const typing = tag === 'input' || tag === 'textarea';
+
+    if ((e.ctrlKey || e.metaKey) && !typing) {
+      if (e.key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
+      if (e.key === 'y' || (e.key === 'z' && e.shiftKey)) { e.preventDefault(); redo(); return; }
+      if (e.key === 'd' && selected) {
+        e.preventDefault();
+        duplicateImageBtn.click();
+        return;
+      }
+    }
+    if (!selected || typing) return;
+
+    if (e.key === 'Escape') {
+      selected.el.classList.remove('selected');
+      selected = null;
+      imageControls.hidden = true;
+      return;
+    }
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      e.preventDefault();
+      deleteImageBtn.click();
+      return;
+    }
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key) && pageMetrics) {
+      e.preventDefault();
+      const step = e.shiftKey ? 10 : 1;
+      const dx = (e.key === 'ArrowRight' ? step : e.key === 'ArrowLeft' ? -step : 0) / pageMetrics.width;
+      const dy = (e.key === 'ArrowDown' ? step : e.key === 'ArrowUp' ? -step : 0) / pageMetrics.height;
+      selected.xFrac = clamp(selected.xFrac + dx, 0, 1 - selected.wFrac);
+      selected.yFrac = clamp(selected.yFrac + dy, 0, 1 - selected.hFrac);
+      updateElPosition(selected);
+      clearTimeout(document._nudgeT);
+      document._nudgeT = setTimeout(() => snapshot(), 400);
+    }
   });
 
   // ============================================================
@@ -424,29 +729,15 @@
       return;
     }
     btnDownload.disabled = true;
-    const originalText = btnDownload.textContent;
-    btnDownload.textContent = 'Generando...';
+    const originalHTML = btnDownload.innerHTML;
+    btnDownload.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i><span>Generando...</span>';
     try {
-      const payload = images.map((im) => {
-        // Convertir px de canvas → unidades PDF
-        const sf = pageMetrics.scaleFactor;
-        return {
-          pageIndex: im.pageIndex,
-          dataUrl: im.dataUrl,
-          x: im.x / sf,
-          y: im.y / sf,
-          w: im.w / sf,
-          h: im.h / sf,
-          rotation: im.rotation,
-          opacity: im.opacity,
-          filter: im.filter
-        };
-      });
-      const blob = await PDFEditor.exportPDF(payload);
+      const blob = await PDFEditor.exportPDF(images);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'documento-editado.pdf';
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      a.download = `documento-editado-${ts}.pdf`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -457,31 +748,12 @@
       showToast('Error al exportar. Inténtalo de nuevo.');
     } finally {
       btnDownload.disabled = false;
-      btnDownload.textContent = originalText;
+      btnDownload.innerHTML = originalHTML;
     }
   });
 
-  // ============================================================
-  //  RESET
-  // ============================================================
   btnReset.addEventListener('click', () => {
     if (!confirm('¿Cerrar el documento actual? Se perderán los cambios no descargados.')) return;
     location.reload();
   });
-
-  // ============================================================
-  //  TOAST
-  // ============================================================
-  let toastTimer;
-  function showToast(msg) {
-    clearTimeout(toastTimer);
-    toastEl.textContent = msg;
-    toastEl.classList.remove('hidden');
-    toastTimer = setTimeout(() => toastEl.classList.add('hidden'), 2600);
-  }
-
-  // ============================================================
-  //  INIT
-  // ============================================================
-  setupUpload();
 })();
